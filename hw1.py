@@ -62,8 +62,21 @@ def build_chain() -> Any:
     Use the vision-capable DeepSeek Flash model named
     ``deepseek-v4-flash-vision-exp``. The API key is loaded from .env.
     """
-    ### YOUR CODE HERE
-    return None
+    import os
+
+    from langchain_deepseek import ChatDeepSeek
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "DEEPSEEK_API_KEY is missing. Add it to .env before running the homework."
+        )
+
+    return ChatDeepSeek(
+        model="deepseek-v4-flash-vision-exp",
+        api_key=api_key,
+        temperature=0,
+    )
 
 
 def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
@@ -78,9 +91,71 @@ def answer_queries(chain: Any, images: list[Path]) -> dict[str, Any]:
     multimodal human messages. LangChain's ``batch`` method is one simple way
     to process independent receipt-extraction prompts in parallel.
     """
-    ### YOUR CODE HERE
-    _ = (chain, images)
-    return {QUERY_1: DUMMY_RESPONSE, QUERY_2: DUMMY_RESPONSE}
+    from langchain_core.messages import HumanMessage
+
+    extraction_prompt = """
+You are reading one Hong Kong supermarket receipt. Return exactly one JSON
+object and no Markdown. Use these keys only:
+{
+  "final_payment_hkd": "0.00",
+  "subtotal_after_discounts_before_rounding_hkd": "0.00",
+  "discount_total_hkd": "0.00",
+  "rounding_hkd": "0.00"
+}
+
+final_payment_hkd is the final amount actually paid, after the receipt's
+rounding adjustment. subtotal_after_discounts_before_rounding_hkd is the
+amount immediately before the rounding line, after all discounts.
+discount_total_hkd is the positive total of every promotion, coupon, member,
+app, percentage, packaging-damage, or other discount. Count each discount
+once. rounding_hkd is the signed rounding adjustment, or 0.00 when there is
+no rounding line. Check that final_payment_hkd minus rounding_hkd equals the
+subtotal after discounts. Ignore tendered cash, change, and loyalty points.
+Read numbers carefully.
+""".strip()
+
+    prompts = [
+        [
+            HumanMessage(
+                content=[
+                    {"type": "text", "text": extraction_prompt},
+                    {"type": "image_url", "image_url": {"url": image_data_url(path)}},
+                ]
+            )
+        ]
+        for path in images
+    ]
+    raw_responses = chain.batch(prompts, config={"max_concurrency": min(4, len(prompts))})
+
+    def as_amount(value: Any) -> Decimal:
+        match = re.search(r"-?\d[\d,]*(?:\.\d+)?", str(value))
+        if not match:
+            raise ValueError(f"No amount found in model output: {value!r}")
+        return Decimal(match.group().replace(",", ""))
+
+    def as_receipt(response: Any) -> dict[str, Any]:
+        text = response_text(response)
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise ValueError(f"The receipt response was not JSON: {text!r}")
+        data = json.loads(match.group())
+        if not isinstance(data, dict):
+            raise ValueError(f"The receipt response was not a JSON object: {text!r}")
+        return data
+
+    spent = Decimal("0")
+    without_discount = Decimal("0")
+    for raw_response in raw_responses:
+        receipt = as_receipt(raw_response)
+        spent += as_amount(receipt["final_payment_hkd"])
+        subtotal = as_amount(receipt["subtotal_after_discounts_before_rounding_hkd"])
+        discount_total = abs(as_amount(receipt["discount_total_hkd"]))
+        without_discount += subtotal + discount_total
+
+    return {
+        QUERY_1: f"HK${spent.quantize(Decimal('0.01')):.2f}",
+        QUERY_2: f"HK${without_discount.quantize(Decimal('0.01')):.2f}",
+    }
 
 
 # Everything below is provided runner/scoring code. No edits are needed.

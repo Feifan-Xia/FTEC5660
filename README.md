@@ -48,6 +48,21 @@ DeepSeek Flash model. JPEG, PNG, GIF, and WebP inputs are accepted by the
 homework runner.
 
 
-## Homework 1 solution: 
-> to students: please fill your solution description here.
+## Homework 1 solution
+
+```mermaid
+flowchart LR
+    A[Receipt images] --> B[Parallel vision extraction]
+    B --> C[Structured receipt fields]
+    C --> D[Aggregate final payments]
+    C --> E[Aggregate subtotal plus discounts]
+    D --> F[Total spent]
+    E --> G[Cost without discounts]
+```
+
+The program sends each receipt to `deepseek-v4-flash-vision-exp` in parallel
+through LangChain. The model returns the final payment, subtotal after
+discounts, total discount, and rounding adjustment as JSON. The program sums
+the final payments for the first answer. For the second answer, it adds each
+receipt's total discount to its subtotal after discounts and excludes rounding.
 
